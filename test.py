@@ -81,6 +81,7 @@ class Movie(BaseModel):
     director = Column(String(8))
     studio = Column(String(8))
     publisher = Column(String(8))
+    series = Column(String(8))
     cover = Column(String(64))
     thumb = Column(String(64))
 
@@ -189,62 +190,60 @@ class JavbusCrawler:
         movie_boxes = doc.select('div#waterfall a.movie-box')
         movies = []
         for box in movie_boxes:
+            thumb_url = box.find_next('img').attrs['src']
+            t = thumb_url.rindex('/')
+            thumb = thumb_url[t+1:]
             movie_url = box.attrs['href']
             t = movie_url.rindex('/')
             bango = movie_url[t+1:]
-            movie, movie_actresses, movie_tags, names = self.fetch_movie(bango)
+            movie, movie_actresses, movie_tags, names = self.fetch_movie(bango, thumb)
             movies.append(movie)
         return movies
 
-    def fetch_movie(self, bango):
+    def fetch_movie(self, bango, thumb=None):
         url = '/{}'.format(bango)
         html = self.get_request(url)
 
         doc = BeautifulSoup(html, parser)
-        title_node = doc.select_one('div.container h3')
-        info_node = doc.select_one('div.info')
+        info_nodes = doc.select('div.info span.header')
         cover_node = doc.select_one('div.screencap img')
 
-        if title_node is None:
-            logger.warning('标题节点获取失败')
-        if info_node is None:
-            logger.warning('信息节点获取失败')
         if cover_node is None:
             logger.warning('封面节点获取失败')
 
-        cover_link = cover_node.attrs['src']
-        t = cover_link.rindex('/')
-        cover = cover_link[t+1:]
-
-        ps = info_node.find_all_next('p')
-        length_str = ps[2].contents[1]
-        m = re.match(r'\s*(\d+).*', length_str)
-        length = m.group(1)
-
-        director_link = ps[3].contents[2].attrs['href']
-        t = director_link.rindex('/')
-        director = director_link[t+1:]
-
-        studio_link = ps[4].contents[2].attrs['href']
-        t = studio_link.rindex('/')
-        studio = studio_link[t+1:]
-
-        publisher_link = ps[5].contents[2].attrs['href']
-        t = publisher_link.rindex('/')
-        publisher = publisher_link[t+1:]
-
-        release_at = ps[1].contents[1]
-        release_date = datetime.strptime(release_at.strip(), '%Y-%m-%d')
-
         movie = Movie()
         movie.id = bango
-        movie.cover = cover
-        movie.name = title_node.text
-        movie.release_at = release_date
-        movie.length = length
-        movie.director = director
-        movie.studio = studio
-        movie.publisher = publisher
+        movie.thumb = thumb
+
+        cover_link = cover_node.attrs['src']
+        t = cover_link.rindex('/')
+        movie.cover = cover_link[t+1:]
+        movie.name = cover_node.attrs['title']
+
+        for info_node in info_nodes:
+            if info_node.text == '發行日期:':
+                release_at = info_node.next_sibling
+                movie.release_at = datetime.strptime(release_at.strip(), '%Y-%m-%d')
+            if info_node.text == '長度:':
+                length_str = info_node.next_sibling
+                m = re.match(r'\s*(\d+).*', length_str)
+                movie.length = m.group(1)
+            if info_node.text == '導演:':
+                link = info_node.next_sibling.next_sibling.attrs['href']
+                t = link.rindex('/')
+                movie.director = link[t+1:]
+            if info_node.text == '製作商:':
+                link = info_node.next_sibling.next_sibling.attrs['href']
+                t = link.rindex('/')
+                movie.studio = link[t+1:]
+            if info_node.text == '發行商:':
+                link = info_node.next_sibling.next_sibling.attrs['href']
+                t = link.rindex('/')
+                movie.publisher = link[t+1:]
+            if info_node.text == '系列:':
+                link = info_node.next_sibling.next_sibling.attrs['href']
+                t = link.rindex('/')
+                movie.series = link[t+1:]
 
         movie_actresses = []
         movie_tags = []
@@ -283,12 +282,9 @@ def save_movie(movie):
 if __name__ == '__main__':
     logger.info("javbus crawler v0.1.0")
     logger.debug("javbus爬虫启动")
-    # fetch_tags()
-    # fetch_movies_by_page(0)
     crawler = JavbusCrawler()
     tags = crawler.fetch_tags()
     save_tags(tags)
-    # movie, movie_actresses, movie_tags, names = crawler.fetch_movie('IKEP-003')
     movies = crawler.fetch_actress_page('uds', 1)
     for movie in movies:
         save_movie(movie)
