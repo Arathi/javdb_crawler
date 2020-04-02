@@ -53,6 +53,9 @@ class Actress(BaseModel):
     name = Column(String(256))
     name_cn = Column(String(256))
 
+    def __str__(self):
+        return '{}|{}|{}'.format(self.id, self.name, self.name_cn)
+
 
 class Director(BaseModel):
     __tablename__ = 'directors'
@@ -85,6 +88,9 @@ class Movie(BaseModel):
     cover = Column(String(64))
     thumb = Column(String(64))
 
+    def __str__(self):
+        return '{}|{}'.format(self.id, self.name)
+
 
 class MovieActress(BaseModel):
     __tablename__ = 'movie_actress'
@@ -96,9 +102,8 @@ class MovieTag(BaseModel):
     __tablename__ = 'movie_tags'
     bango = Column(String(32), primary_key=True)
     tag_id = Column(String(8), primary_key=True)
-
-
 # endregion
+
 
 # db
 engine = create_engine('sqlite:///./javbus.db3')
@@ -146,6 +151,15 @@ class JavbusCrawler:
         if filename is None:
             filename = hash(uri)
 
+        # 演员列表
+        m = re.match(r'/actresses/(\d+)', uri)
+        if m is not None:
+            category = 'actresses'
+            page_id = m.group(1)
+            if page_id is None:
+                page_id = 1
+            filename = '{}_{}.html'.format('index', page_id)
+
         cache_dir = '{}/{}'.format(self.cache_path, category)
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -156,7 +170,7 @@ class JavbusCrawler:
             html = fp.read()
             fp.close()
         else:
-            url = '{}/{}'.format(self.base_url, uri)
+            url = '{}{}'.format(self.base_url, uri)
             logger.info('正在下载' + url)
             resp = requests.get(url)
             html = resp.text
@@ -188,6 +202,13 @@ class JavbusCrawler:
         html = self.get_request(uri)
         doc = BeautifulSoup(html, parser)
         movie_boxes = doc.select('div#waterfall a.movie-box')
+        next_page_link = doc.select_one('a#next')
+        if next_page_link is None:
+            next_page = 0
+        else:
+            href = next_page_link.attrs['href']
+            t = href.rindex('/')
+            next_page = href[t+1:]
         movies = []
         for box in movie_boxes:
             thumb_url = box.find_next('img').attrs['src']
@@ -198,7 +219,7 @@ class JavbusCrawler:
             bango = movie_url[t+1:]
             movie, movie_actresses, movie_tags, names = self.fetch_movie(bango, thumb)
             movies.append(movie)
-        return movies
+        return movies, next_page
 
     def fetch_movie(self, bango, thumb=None):
         url = '/{}'.format(bango)
@@ -250,6 +271,24 @@ class JavbusCrawler:
         names = {}
         return movie, movie_actresses, movie_tags, names
 
+    def fetch_actress_list(self, page):
+        url = '/actresses/{}'.format(page)
+        html = self.get_request(url)
+
+        doc = BeautifulSoup(html, parser)
+        act_nodes = doc.select('div#waterfall div.photo-frame img')
+        actresses = []
+        for act_node in act_nodes:
+            link = act_node.parent.parent
+            href = link.attrs['href']
+            t = href.rindex('/')
+            act_id = href[t+1:]
+            actress = Actress()
+            actress.id = act_id
+            actress.name = act_node.attrs['title']
+            actresses.append(actress)
+        return actresses
+
 
 def save_tags(tags):
     session = DBSession()
@@ -283,8 +322,12 @@ if __name__ == '__main__':
     logger.info("javbus crawler v0.1.0")
     logger.debug("javbus爬虫启动")
     crawler = JavbusCrawler()
-    tags = crawler.fetch_tags()
-    save_tags(tags)
-    movies = crawler.fetch_actress_page('uds', 1)
-    for movie in movies:
-        save_movie(movie)
+    for i in range(1, 11):
+        actresses = crawler.fetch_actress_list(1)
+        for actress in actresses:
+            page = 1
+            while page > 0:
+                movies, page = crawler.fetch_actress_page(actress.id, page)
+                for movie in movies:
+                    save_movie(movie)
+                page = int(page)
